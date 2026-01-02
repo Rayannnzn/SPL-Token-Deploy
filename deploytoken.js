@@ -1,48 +1,110 @@
-const solanaWeb3 = require("@solana/web3.js");
-const splToken = require("@solana/spl-token");
-const bs58 = require("bs58");
+import {
+  Connection,
+  Keypair,
+  clusterApiUrl,
+  PublicKey,
+  Transaction,
+  sendAndConfirmTransaction,
+} from "@solana/web3.js";
 
-// Converted Paste here
-const phantomKeyBase58 = "";
-const secretKey = bs58.default.decode(phantomKeyBase58);
-const wallet = solanaWeb3.Keypair.fromSecretKey(secretKey);
+import {
+  createMint,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+} from "@solana/spl-token";
 
-(async () => {
-  const connection = new solanaWeb3.Connection(solanaWeb3.clusterApiUrl("devnet"), "confirmed");
+// Now this will work because version 2 exports it
+import {
+  createCreateMetadataAccountV3Instruction,
+} from "@metaplex-foundation/mpl-token-metadata";
 
-  console.log("Wallet public key:", wallet.publicKey.toBase58());
+import fs from "fs";
 
-  // Create new SPL token
-  const mint = await splToken.createMint(
-    connection,
-    wallet,           // payer
-    wallet.publicKey, // mint authority
-    null,             // freeze authority (optional)
-    9                 // decimals
-  );
-
-  console.log("Token Mint Address:", mint.toBase58());
-
-  // Create associated token account for yourself
-  const tokenAccount = await splToken.getOrCreateAssociatedTokenAccount(
-    connection,
-    wallet,
-    mint,
-    wallet.publicKey
-  );
-
-  console.log("Your Token Account Address:", tokenAccount.address.toBase58());
-
-  // Mint some tokens to yourself
-const amount = 500_000_000 * 10 ** 9; // 500 million tokens with 9 decimals
-await splToken.mintTo(
-  connection,
-  wallet,
-  mint,
-  tokenAccount.address,
-  wallet,
-  amount
+// Metadata program ID always stays the same
+const TOKEN_METADATA_PROGRAM_ID = new PublicKey(
+  "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
 );
 
-  console.log("Minted 500 million tokens successfully!");
+// Load your keypair from JSON
+const secret = Uint8Array.from(JSON.parse(fs.readFileSync("keypair.json")));
+const payer = Keypair.fromSecretKey(secret);
+
+const connection = new Connection(clusterApiUrl("devnet"), "confirmed");
+
+(async () => {
+  try {
+    console.log("Wallet:", payer.publicKey.toBase58());
+
+    // Create a mint with 9 decimals
+    const mint = await createMint(
+      connection,
+      payer,
+      payer.publicKey,
+      null,
+      9
+    );
+    console.log("Mint:", mint.toBase58());
+
+    // Create associated token account
+    const tokenAccount = await getOrCreateAssociatedTokenAccount(
+      connection,
+      payer,
+      mint,
+      payer.publicKey
+    );
+
+    // Mint 1,000,000 tokens
+    await mintTo(
+  connection,
+  payer,
+  mint,
+  tokenAccount.address,
+  payer.publicKey,
+  1_000_000_000n * 10n ** 9n
+);
+console.log("✅ Minted 1,000,000,000 tokens");
+    // Derive PDA for metadata
+    const [metadataPDA] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("metadata"),
+        TOKEN_METADATA_PROGRAM_ID.toBuffer(),
+        mint.toBuffer(),
+      ],
+      TOKEN_METADATA_PROGRAM_ID
+    );
+
+    // Build metadata instruction
+    const metadataIx = createCreateMetadataAccountV3Instruction(
+      {
+        metadata: metadataPDA,
+        mint,
+        mintAuthority: payer.publicKey,
+        payer: payer.publicKey,
+        updateAuthority: payer.publicKey,
+      },
+      {
+        createMetadataAccountArgsV3: {
+          data: {
+            name: "Rayan Tokens 1B" , // your name
+            symbol: "DTT",            // your symbol
+            uri: "",                  // optional metadata JSON URL
+            sellerFeeBasisPoints: 0,
+            creators: null,
+            collection: null,
+            uses: null,
+          },
+          isMutable: true,
+          collectionDetails: null,
+        },
+      }
+    );
+
+    // Send transaction
+    const tx = new Transaction().add(metadataIx);
+    await sendAndConfirmTransaction(connection, tx, [payer]);
+
+    console.log("✅ Metadata created — name & symbol set!");
+  } catch (err) {
+    console.error("❌ Error:", err);
+  }
 })();
